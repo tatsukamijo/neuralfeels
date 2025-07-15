@@ -58,7 +58,10 @@ git clone git@github.com:facebookresearch/neuralfeels.git
 Our preferred choice is via `micromamba` ([link](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html)). Run the bash script that sets everything up:
 
 ```bash
+./BUILD_DOCKER_CONTAINER.sh
+./RUN_DOCKER_CONTAINER.sh <YOUR_NAME>
 ./install.sh -e neuralfeels
+eval "$(micromamba shell hook --shell bash)"
 micromamba activate neuralfeels  
 ```
 

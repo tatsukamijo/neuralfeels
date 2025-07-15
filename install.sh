@@ -42,40 +42,41 @@ echo "Environment Name: $ENV_NAME"
 
 unset PYTHONPATH LD_LIBRARY_PATH
 
-# # remove any exisiting env
-micromamba remove -y -n $ENV_NAME --all
+# Remove any existing env
+micromamba remove -y -n $ENV_NAME --all || true
 micromamba env create -y --name $ENV_NAME --file environment.yml
-micromamba activate $ENV_NAME
 
-# Following the instructions from https://docs.nerf.studio/quickstart/installation.html for the right combination of cuda / torch / tinycudann
-python -m pip install --upgrade pip
-pip uninstall torch torchvision functorch tinycudann -y
-pip install torch==2.1.2+cu118 torchvision==0.16.2+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 -y
-micromamba install -c "nvidia/label/cuda-11.8.0" cuda-toolkit
+# Initialize shell for micromamba
+eval "$(micromamba shell hook --shell bash)"
+
+# Use micromamba run for all environment-specific commands
+micromamba run -n $ENV_NAME python -m pip install --upgrade pip
+micromamba run -n $ENV_NAME pip uninstall torch torchvision functorch tinycudann -y
+micromamba run -n $ENV_NAME pip install torch==2.1.2+cu118 torchvision==0.16.2+cu118 --extra-index-url https://download.pytorch.org/whl/cu118
+micromamba run -n $ENV_NAME micromamba install -c "nvidia/label/cuda-11.8.0" cuda-toolkit
 
 # Check if the install is successful
-python -c "import torch; assert torch.cuda.is_available()"
-if nvcc --version &>/dev/null; then
+micromamba run -n $ENV_NAME python -c "import torch; assert torch.cuda.is_available()"
+if micromamba run -n $ENV_NAME nvcc --version &>/dev/null; then
     echo "nvcc is installed and working."
 else
     echo "nvcc is not installed or not in PATH."
     exit 1
 fi
 
-# Install tinycudann for instant-ngp backbone. Common issues:
-# - Setup with gcc/g++ 9 if it throws errors (see issue: https://github.com/NVlabs/tiny-cuda-nn/issues/284)
-# - Differing compute capabilities: https://github.com/NVlabs/tiny-cuda-nn/issues/341#issuecomment-1651814335
-pip install ninja \
+# Install tinycudann for instant-ngp backbone and other pip packages
+micromamba run -n $ENV_NAME pip install ninja \
     git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch \
-    git+https://github.com/facebookresearch/segment-anything.git \ 
-git+https://github.com/suddhu/tacto.git@master
+    git+https://github.com/facebookresearch/segment-anything.git \
+    git+https://github.com/suddhu/tacto.git@master
 
 # Install github.com/facebookresearch/theseus
-micromamba install -y suitesparse # required for theseus
-pip install theseus-ai
+micromamba run -n $ENV_NAME micromamba install -y suitesparse # required for theseus
+micromamba run -n $ENV_NAME micromamba install -c conda-forge scikit-sparse
+micromamba run -n $ENV_NAME pip install theseus-ai
 
 # Install neuralfeels package
-pip install -e .
+micromamba run -n $ENV_NAME pip install -e .
 
 # Make entrypoint executable
 chmod +x scripts/run
