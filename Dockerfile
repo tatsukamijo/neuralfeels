@@ -19,6 +19,8 @@ RUN apt-get update && \
     libxext6 \
     libsm6 \
     libxrender1 \
+    libgl1 \
+    libglu1-mesa \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Micromamba install ---
