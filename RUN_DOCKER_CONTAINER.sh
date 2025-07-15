@@ -15,9 +15,12 @@ CONTAINER_NAME="${NAME}_neuralfeels_dev"
 
 # --- Run ---
 echo "[INFO] Running Docker container $CONTAINER_NAME from image $IMAGE_NAME..."
-docker run --rm -it \
+docker run -it \
   --gpus all \
   --name "$CONTAINER_NAME" \
   -v "$HOST_DIR":"$CONTAINER_DIR" \
   -w "$CONTAINER_DIR" \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -e XAUTHORITY=$XAUTHORITY \
   $IMAGE_NAME 
