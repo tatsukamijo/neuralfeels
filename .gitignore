@@ -1,5 +1,6 @@
 res
 results/*
+*.png
 
 # mesh files 
 *.ply
