@@ -46,6 +46,9 @@ unset PYTHONPATH LD_LIBRARY_PATH
 micromamba remove -y -n $ENV_NAME --all || true
 micromamba env create -y --name $ENV_NAME --file environment.yml
 
+# Install p11-kit for ROS/cv_bridge compatibility
+micromamba install -y -n $ENV_NAME -c conda-forge p11-kit
+
 # Initialize shell for micromamba
 eval "$(micromamba shell hook --shell bash)"
 

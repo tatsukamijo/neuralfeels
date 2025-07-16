@@ -1,6 +1,7 @@
 name: _neuralfeels
 channels:
   - defaults
+  - conda-forge
 dependencies:
   - _libgcc_mutex
   - _openmp_mutex
@@ -35,6 +36,7 @@ dependencies:
   - xz
   - yaml
   - zlib
+  - p11-kit
   - pip:
     - cython==3.0.0
     - datasets==3.1.0
