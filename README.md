@@ -66,6 +66,11 @@ micromamba activate neuralfeels
 ```
 
 ### 3. Download the FeelSight dataset
+If you're working on robot_dev machines at Matsuo_lab, just put a symlink to the dataset:
+```bash
+ln -s /robot-qnap-2/kamijo/neuralfeels/data
+```
+and you don't need to follow the steps below.
 
 Clone the 🤗 dataset and unzip all files. Make sure you have `git-lfs` installed, it may take a while: 
 

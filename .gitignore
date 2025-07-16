@@ -9,6 +9,7 @@ results/*
 # save files 
 *.pkl
 
+/data/
 data/*
 !data/README.md
 .vscode
