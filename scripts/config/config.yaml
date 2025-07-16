@@ -6,6 +6,7 @@
 defaults: 
   - main: vitac
   - launcher: basic
+  - realtime: null
   - _self_
 
 user: suddhu

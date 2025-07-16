@@ -23,7 +23,7 @@ if [[ $1 == "--help" ]]; then
     echo "  --pose-real        # Run neural tracking in real-world with large dice"
     echo "  --three-cam        # Three camera pose tracking in real-world with large dice"
     echo "  --occlusion-sim    # Run neural tracking in simulation with occlusion logs"
-    echo "  --leap-real        # Run neuralfeels with real leaphand + DIGIT via ROS topics (DATASET can be omitted)"
+    echo "  --leap-real        # Run neuralfeels with real leaphand + DIGIT via ROS topics (Hydra preset, realtime group)"
     exit 0
 elif [[ $1 = "--slam-sim" ]]; then
     # Example of neural SLAM in simulation with rubber duck
@@ -88,7 +88,7 @@ elif [[ $1 = "--occlusion-sim" ]]; then
     OPEN3D=1
     EXTRA_ARGS="main.sensor0.masks=read main.occlusion=True"
 elif [[ $1 = "--leap-real" ]]; then
-    # Real-time leaphand + DIGIT via ROS topics
+    # Real-time leaphand + DIGIT via ROS topics (Hydra group override)
     DATASET=""
     SLAM_MODE="slam"
     MODALITY="vitac"
@@ -97,7 +97,7 @@ elif [[ $1 = "--leap-real" ]]; then
     FPS=1
     RECORD=1
     OPEN3D=1
-    EXTRA_ARGS="--leap-real"
+    EXTRA_ARGS="realtime=leap_real"
 else
     if [ $# -lt 8 ]; then
         echo "Error: Missing arguments."
