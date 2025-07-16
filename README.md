@@ -124,6 +124,7 @@ Arguments:
   RECORD: integer    # Whether to record the session, options are '1' (yes) or '0' (no)
   OPEN3D: integer    # Whether to use Open3D, options are '1' (yes) or '0' (no)
 Presets:
+  --leap-real        # Run neuralfeels with real leaphand + DIGIT via ROS topics (DATASET can be omitted)
   --slam-sim         # Run neural SLAM in simulation with rubber duck
   --pose-sim         # Run neural tracking in simulation with Rubik's cube
   --slam-real        # Run neural SLAM in real-world with bell pepper

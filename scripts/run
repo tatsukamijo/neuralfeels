@@ -7,7 +7,7 @@ if [[ $1 == "--help" ]]; then
     echo "Usage: ./scripts/run DATASET SLAM_MODE MODALITY OBJECT LOG FPS RECORD OPEN3D"
     echo ""
     echo "Arguments:"
-    echo "  DATASET: string    # The dataset to be used, options are 'feelsight', 'feelsight_real'"
+    echo "  DATASET: string    # The dataset to be used, options are 'feelsight', 'feelsight_real', or omitted for real-time mode"
     echo "  SLAM_MODE: string  # The mode to be used, options are 'slam', 'pose', 'map'"
     echo "  MODALITY: string   # The modality to be used, options are 'vitac', 'vi', 'tac'"
     echo "  OBJECT: string     # The object to be used, e.g., '077_rubiks_cube'"
@@ -23,6 +23,7 @@ if [[ $1 == "--help" ]]; then
     echo "  --pose-real        # Run neural tracking in real-world with large dice"
     echo "  --three-cam        # Three camera pose tracking in real-world with large dice"
     echo "  --occlusion-sim    # Run neural tracking in simulation with occlusion logs"
+    echo "  --leap-real        # Run neuralfeels with real leaphand + DIGIT via ROS topics (DATASET can be omitted)"
     exit 0
 elif [[ $1 = "--slam-sim" ]]; then
     # Example of neural SLAM in simulation with rubber duck
@@ -86,6 +87,17 @@ elif [[ $1 = "--occlusion-sim" ]]; then
     RECORD=1
     OPEN3D=1
     EXTRA_ARGS="main.sensor0.masks=read main.occlusion=True"
+elif [[ $1 = "--leap-real" ]]; then
+    # Real-time leaphand + DIGIT via ROS topics
+    DATASET=""
+    SLAM_MODE="slam"
+    MODALITY="vitac"
+    OBJECT="bell_pepper"
+    LOG="00"
+    FPS=1
+    RECORD=1
+    OPEN3D=1
+    EXTRA_ARGS="--leap-real"
 else
     if [ $# -lt 8 ]; then
         echo "Error: Missing arguments."
@@ -106,9 +118,11 @@ else
     EXTRA_ARGS=${array[@]:8:$len}
 fi
 
-if [[ ${DATASET} != "feelsight" && ${DATASET} != "feelsight_real" ]]; then
-    echo "Error: Invalid DATASET. Options are 'feelsight', 'feelsight_real'."
-    exit 1
+if [ "$DATASET" != "" ]; then
+    if [[ ${DATASET} != "feelsight" && ${DATASET} != "feelsight_real" ]]; then
+        echo "Error: Invalid DATASET. Options are 'feelsight', 'feelsight_real', or omitted for real-time mode."
+        exit 1
+    fi
 elif [[ ${SLAM_MODE} != "slam" && ${SLAM_MODE} != "pose" && ${SLAM_MODE} != "map" ]]; then
     echo "Error: Invalid SLAM_MODE. Options are 'slam', 'pose', 'map'."
     exit 1
@@ -140,8 +154,10 @@ else
     open3d_string="main.viz.misc.render_open3d=False"
 fi
 
-dir=$(date +\"outputs/%Y-%m-%d/%H-%M-%S\")
-argstring="main=${MODALITY} \
+dir=$(date +"outputs/%Y-%m-%d/%H-%M-%S")
+
+if [ "$DATASET" != "" ]; then
+    argstring="main=${MODALITY} \
 main.data.object=${OBJECT} \
 main.data.log=${LOG} \
 main.data.dataset=${DATASET} \
@@ -155,6 +171,21 @@ main.viz.layers.pointcloud=None \
 ${record_string} \
 sweep_dir=${dir} \
 ${EXTRA_ARGS}"
+else
+    argstring="main=${MODALITY} \
+main.data.object=${OBJECT} \
+main.data.log=${LOG} \
+main.train.train_mode=${SLAM_MODE} \
+main.viz.meshes.mesh_rec_crop=False \
+main.viz.debug.origin=True \
+main.viz.meshes.show_gt_object=False \
+main.viz.meshes.transparent=False \
+main.data.train_fps=${FPS} \
+main.viz.layers.pointcloud=None \
+${record_string} \
+sweep_dir=${dir} \
+${EXTRA_ARGS}"
+fi
 
 echo -e "python scripts/run.py ${argstring}"
 python scripts/run.py ${argstring}

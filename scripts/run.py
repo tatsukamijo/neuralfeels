@@ -18,6 +18,7 @@ import torch
 from omegaconf import DictConfig
 from pyvirtualdisplay import Display
 from termcolor import cprint
+import argparse
 
 if TYPE_CHECKING:
     from neuralfeels.modules.trainer import Trainer
@@ -164,6 +165,16 @@ def main(cfg: DictConfig):
     Args:
         cfg (DictConfig): Hydra configuration
     """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--leap-real', action='store_true', help='Use real-time data from leaphand + DIGIT sensors via ROS topics')
+    args, unknown = parser.parse_known_args()
+    leap_real = args.leap_real
+
+    if leap_real:
+        print("[INFO] --leap-real mode: Real-time leaphand + DIGIT via ROS topics (dummy implementation)")
+        # TODO(kamijo): Implement real-time data loader for leap_real mode 2025-07-06
+        sys.exit(0)
+
     gpu_id = cfg.gpu_id
     torch.set_default_device(f"cuda:{gpu_id}")
     cprint(f"Using GPU: {gpu_id}", color="yellow")
