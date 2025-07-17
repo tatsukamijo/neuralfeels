@@ -19,6 +19,8 @@ from omegaconf import DictConfig
 from pyvirtualdisplay import Display
 from termcolor import cprint
 import argparse
+import logging
+logging.basicConfig(level=logging.INFO)
 
 if TYPE_CHECKING:
     from neuralfeels.modules.trainer import Trainer
@@ -70,19 +72,18 @@ def _load_frames_incremental(trainer: "Trainer", t):
         for sensor_name in trainer.sensor_list:
             n_keyframes_start = trainer.n_keyframes[sensor_name]
 
-            if "digit" in sensor_name:
+            if "digit" in sensor_name and trainer.realtime_mode:
+                # Use same frame_id for all sensors at the same timestep (like offline mode)
+                frame_data = trainer.ros_digit_loader.get_frame_data(
+                    new_frame_id, digit_poses[sensor_name],
+                    ["digit_thumb", "digit_index", "digit_middle", "digit_ring"].index(sensor_name),
+                    device=trainer.device)
+            elif "digit" in sensor_name:
                 frame_data = trainer.sensor[sensor_name].get_frame_data(
-                    new_frame_id,
-                    digit_poses[sensor_name],
-                    msg_data=None,
-                )
+                    new_frame_id, digit_poses[sensor_name], msg_data=None)
             else:
                 frame_data = trainer.sensor[sensor_name].get_frame_data(
-                    new_frame_id,
-                    digit_poses,
-                    trainer.latest_render_depth[sensor_name],
-                    msg_data=None,
-                )
+                    new_frame_id, digit_poses, trainer.latest_render_depth[sensor_name], msg_data=None)
 
             added_frame = trainer.add_frame(frame_data)
             if t == 0:
@@ -165,15 +166,22 @@ def main(cfg: DictConfig):
     Args:
         cfg (DictConfig): Hydra configuration
     """
+    import logging
+    logging.basicConfig(level=logging.INFO, force=True)
+    logging.getLogger().setLevel(logging.INFO)
+    print("[DEBUG] logging forcibly set to INFO level in run.py main()")
+    from neuralfeels.modules.ros_digit_loader import RealTimeDigitDataLoader
+
+    ros_digit_loader = None
+    if getattr(getattr(cfg, "realtime", {}), "leap_real", False):
+        ros_digit_loader = RealTimeDigitDataLoader()
+        print("[INFO] RealTimeDigitDataLoader instantiated and will be passed to Trainer (dummy integration)")
 
     gpu_id = cfg.gpu_id
     torch.set_default_device(f"cuda:{gpu_id}")
     cprint(f"Using GPU: {gpu_id}", color="yellow")
     try:
         import open3d.visualization.gui as gui
-
-        # lazy imports to avoid tinycudann errors when launching locally for a
-        # different architecture
         from neuralfeels.modules.trainer import Trainer
         from neuralfeels.viz import neuralfeels_gui
 
@@ -184,18 +192,21 @@ def main(cfg: DictConfig):
         with OptionalDisplay(
             size=(3840, 1644), use_xauth=True, active=cfg.create_display
         ):
-            tac_slam_trainer = Trainer(cfg=cfg, gpu_id=gpu_id, ros_node=None)
-            # open3d vis window
+            logging.info("[run.py] Instantiating Trainer...")
+            tac_slam_trainer = Trainer(cfg=cfg, gpu_id=gpu_id, ros_digit_loader=ros_digit_loader)
+            logging.info("[run.py] Trainer instantiated.")
+            if ros_digit_loader is not None:
+                logging.info("[run.py] Calling add_all_frames() for REALTIME mode.")
+                tac_slam_trainer.add_all_frames()
             app = gui.Application.instance
             app.initialize()
             mono = app.add_font(gui.FontDescription(gui.FontDescription.MONOSPACE))
-            size_ratio = 0.4  # scaling ratio w.r.t. tkinter resolution
+            size_ratio = 0.4
             w = neuralfeels_gui.GUI(
                 tac_slam_trainer, optim_iter, mono, size_ratio, cfg.profile
             )
             app.run()
-        w.save_data()  # save all the images, meshes, plots, etc.
-        # clear memory
+        w.save_data()
         gc.collect()
         torch.cuda.empty_cache()
 
