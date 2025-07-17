@@ -148,14 +148,19 @@ def expand_data(batch, data, replace=False):
     cat_fn = np.concatenate
     if torch.is_tensor(data):
         cat_fn = torch.cat
-
+    # Print entry
+    print(f"[expand_data] Called with batch type: {type(batch)}, data type: {type(data)}, replace={replace}")
     if batch is None:
         batch = copy.deepcopy(data)
-
     else:
         if replace is False:
             batch = cat_fn((batch, data))
         else:
+            # shape check
+            if hasattr(batch, '__getitem__') and hasattr(data, '__getitem__'):
+                print(f"[expand_data] batch[-1].shape={getattr(batch[-1], 'shape', None)}, data[0].shape={getattr(data[0], 'shape', None)}")
+            if batch[-1].shape != data[0].shape:
+                print(f"expand_data shape mismatch: batch[-1].shape={batch[-1].shape}, data[0].shape={data[0].shape}")
+                raise ValueError(f"expand_data shape mismatch: batch[-1].shape={batch[-1].shape}, data[0].shape={data[0].shape}")
             batch[-1] = data[0]
-
     return batch

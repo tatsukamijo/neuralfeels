@@ -11,6 +11,7 @@ import os
 import pickle
 import shutil
 import time
+from typing import Optional, Dict
 
 import cv2
 import git
@@ -28,6 +29,7 @@ from scipy import ndimage
 from scipy.spatial import cKDTree as KDTree
 from termcolor import cprint
 from tqdm import tqdm
+import logging
 
 from neuralfeels import geometry
 from neuralfeels.datasets import data_util, sdf_util
@@ -53,8 +55,11 @@ root = git.Repo(".", search_parent_directories=True).working_tree_dir
 
 
 class Trainer:
-    def __init__(self, cfg: DictConfig, gpu_id: int = 0, ros_node=None):
+    def __init__(self, cfg: DictConfig, gpu_id: int = 0, ros_digit_loader: Optional[object] = None):
         super(Trainer, self).__init__()
+        self.ros_digit_loader = ros_digit_loader
+        self.realtime_mode = ros_digit_loader is not None
+        logging.info(f"[Trainer.__init__] ros_digit_loader={type(ros_digit_loader)}, realtime_mode={self.realtime_mode}")
 
         self.cfg_main = cfg.main
         self.cfg_data = cfg.main.data
@@ -245,6 +250,8 @@ class Trainer:
             print("Offline mode - adding all frames")
             self.add_all_frames()
 
+        self.realtime_frame_idx = 0  # For unique frame_id in realtime mode
+
     # Init functions ---------------------------------------
 
     def get_latest_frame_id(self):
@@ -363,7 +370,7 @@ class Trainer:
     def set_params(self):
         if "gt_sdf_dir" in self.cfg_data:
             gt_sdf_dir = self.cfg_data.gt_sdf_dir
-            # check if object belongs to ycb or feelsight
+            # check if object belongs to ycb or dextouch
             if "gt_models" in gt_sdf_dir:
                 object_class = "ycb"
                 if self.cfg_data.object in [
@@ -374,7 +381,7 @@ class Trainer:
                     "pepper_grinder",
                     "rubiks_cube_small",
                 ]:
-                    object_class = "feelsight"
+                    object_class = "dextouch"  # ←ここをfeelsight→dextouchに修正
                 gt_sdf_dir = os.path.join(gt_sdf_dir, object_class)
             self.gt_obj_file = os.path.join(
                 root, gt_sdf_dir, f"{self.cfg_data.object}.urdf"
@@ -614,14 +621,12 @@ class Trainer:
         Adds new keyframe data and pointcloud for given sensor format.
         If last frame isn't a keyframe then the new frame replaces last frame in batch.
         """
-
         format = data.format[-1]
         frame_id = data.frame_id[-1]
-
+        print(f"[Trainer.add_data] Adding data for format={format}, frame_id={frame_id}, im_batch.shape={getattr(data.im_batch, 'shape', None)}, im_batch_np.shape={getattr(data.im_batch_np, 'shape', None)}")
         if frame_id in self.frame_id[format]:
             return False
         replace = self.last_is_keyframe is False
-
         self.frames[format].add_frame_data(data, replace)
         # self.frame_id is for bookkeeping the pose optimizer, refer get_pcd()
         if not replace or self.n_keyframes[format] == 0:
@@ -638,44 +643,117 @@ class Trainer:
     def transform_to_object(self, frames):
         T = frames.T_WC_batch.clone()
         frame_obj_state = self.object.object_pose_track[frames.frame_id]
+        print(f"[DEBUG][transform_to_object] frame_id={frames.frame_id}, frame_obj_state.shape={getattr(frame_obj_state, 'shape', None)}")
+        if hasattr(frame_obj_state, 'shape') and frame_obj_state.shape[0] > 0:
+            print(f"[DEBUG][transform_to_object] frame_obj_state[0]=\n{frame_obj_state[0]}")
+        else:
+            print(f"[DEBUG][transform_to_object] frame_obj_state=\n{frame_obj_state}")
         tf_pose = frame_obj_state.inverse() @ T
         return self.p_WO_W @ tf_pose
 
+    def ensure_object_pose_track_length(self, idx: int) -> None:
+        """Ensure object_pose_track is at least idx+1 in length. If not, pad with identity. Only extend if needed."""
+        if not hasattr(self.object, 'object_pose_track'):
+            self.object.object_pose_track = torch.eye(4, device=self.device).unsqueeze(0)
+        
+        # Check if we need to extend
+        if self.object.object_pose_track.shape[0] > idx:
+            # Check if the requested index has a zero matrix and replace it with identity
+            if torch.allclose(self.object.object_pose_track[idx], torch.zeros(4, 4, device=self.device)):
+                print(f"[DEBUG][ensure_object_pose_track_length] Replacing zero matrix at idx={idx} with identity")
+                self.object.object_pose_track[idx] = torch.eye(4, device=self.device)
+            return
+            
+        # Extend with identity matrices
+        pad = [torch.eye(4, device=self.device) for _ in range(idx + 1 - self.object.object_pose_track.shape[0])]
+        pad_tensor = torch.stack(pad, dim=0)
+        print(f"[DEBUG][ensure_object_pose_track_length] Extending to idx={idx}, before: {self.object.object_pose_track.shape}")
+        self.object.object_pose_track = torch.cat([self.object.object_pose_track, pad_tensor], dim=0)
+        print(f"[DEBUG][ensure_object_pose_track_length] After: {self.object.object_pose_track.shape}")
+        print(f"[DEBUG][ensure_object_pose_track_length] New tail: {self.object.object_pose_track[-1]}")
+
     def add_frame(self, frame_data):
-        format = frame_data.format[-1]
+        print(f"[Trainer.add_frame] realtime_mode={self.realtime_mode}")
+        print(f"[Trainer.add_frame] frame_data.format={frame_data.format}, frame_data.frame_id={frame_data.frame_id}, im_batch.shape={getattr(frame_data.im_batch, 'shape', None)}, im_batch_np.shape={getattr(frame_data.im_batch_np, 'shape', None)}")
+        if hasattr(frame_data, 'frame_id') and len(frame_data.frame_id) > 0:
+            frame_idx = frame_data.frame_id[-1]
+            # Always ensure the frame exists and is not a zero matrix
+            self.ensure_object_pose_track_length(frame_idx)
+            print(f"[DEBUG][add_frame] object_pose_track[{frame_idx}] after ensure: {self.object.object_pose_track[frame_idx]}")
+        if self.realtime_mode:
+            logging.info("[Trainer.add_frame] Entering REALTIME branch")
+            format = frame_data.format[-1]
+            self.frames.setdefault(format, FrameData())
+            self.frame_id.setdefault(format, [])
+            self.n_keyframes.setdefault(format, 0)
+            self.steps_since_frame.setdefault(format, 0)
+            self.gt_depth_vis.setdefault(format, None)
+            self.gt_im_vis.setdefault(format, None)
+            self.sample_pts.setdefault(format, None)
+            self.render_frames.setdefault(format, None)
+            self.add_data(frame_data)
+            self.steps_since_frame[format] = 0
+            im_np = frame_data.im_batch_np
+            logging.info(f"[DEBUG][add_frame] RealTime frame added: format={format}, frame_id={frame_data.frame_id}, im_shape={im_np.shape if im_np is not None else None}")
+            return True
+        else:
+            logging.info("[Trainer.add_frame] Entering OFFLINE branch")
+            format = frame_data.format[-1]
 
-        added_frame = self.add_data(frame_data)
+            added_frame = self.add_data(frame_data)
 
-        self.steps_since_frame[format] = 0
-        return added_frame
+            self.steps_since_frame[format] = 0
+            return added_frame
 
     def add_all_frames(self):
-        sensor0_name = list(self.sensor.keys())[0]
-        indices = self.sensor[sensor0_name].batch_indices()
-        # check all sensors have same number of frames
-        for sensor_name in self.sensor.keys():
-            assert len(indices) == len(self.sensor[sensor_name].batch_indices())
-
-        max_frames = self.cfg_train.batch.max_frames
-        indices = np.random.choice(indices, max_frames, replace=False)
-        print("Frame indices added in offline mode:", indices)
-
-        for idx in indices:
-            digit_poses = self.allegro.get_fk(idx=idx)
-
-            for sensor_name in self.sensor.keys():
+        logging.info(f"[Trainer.add_all_frames] realtime_mode={self.realtime_mode}")
+        if self.realtime_mode:
+            logging.info("[Trainer.add_all_frames] Entering REALTIME branch")
+            # Simulate offline mode flow: get poses for current timestep, then process all sensors
+            # For realtime, we use dummy poses since we don't have allegro data
+            dummy_poses = {sensor_name: np.eye(4, dtype=np.float32) for sensor_name in self.sensor_list}
+            
+            # Process all sensors for current timestep (like offline mode)
+            for sensor_name in self.sensor_list:
                 if "digit" in sensor_name:
-                    frame_data = self.sensor[sensor_name].get_frame_data(
-                        idx, digit_poses[sensor_name]
-                    )
+                    digit_idx = ["digit_thumb", "digit_index", "digit_middle", "digit_ring"].index(sensor_name)
+                    frame_data = self.ros_digit_loader.get_frame_data(self.realtime_frame_idx, dummy_poses[sensor_name], digit_idx, device=self.device)
                 else:
-                    frame_data = self.sensor[sensor_name].get_frame_data(
-                        idx, digit_poses
-                    )
-                    self.last_is_keyframe = True
+                    # For realsense, we need to handle differently - for now skip or use dummy data
+                    continue  # Skip realsense for now in realtime mode
                 self.add_frame(frame_data)
+            
+            print(f"[DEBUG][add_all_frames] object_pose_track after adding all sensors for frame_id={self.realtime_frame_idx}: {self.object.object_pose_track[:self.realtime_frame_idx+1]}")
+            self.update_scene_properties(self.realtime_frame_idx)
+            self.realtime_frame_idx += 1
+        else:
+            logging.info("[Trainer.add_all_frames] Entering OFFLINE branch")
+            sensor0_name = list(self.sensor.keys())[0]
+            indices = self.sensor[sensor0_name].batch_indices()
+            # check all sensors have same number of frames
+            for sensor_name in self.sensor.keys():
+                assert len(indices) == len(self.sensor[sensor_name].batch_indices())
 
-            self.update_scene_properties(idx)
+            max_frames = self.cfg_train.batch.max_frames
+            indices = np.random.choice(indices, max_frames, replace=False)
+            print("Frame indices added in offline mode:", indices)
+
+            for idx in indices:
+                digit_poses = self.allegro.get_fk(idx=idx)
+
+                for sensor_name in self.sensor.keys():
+                    if "digit" in sensor_name:
+                        frame_data = self.sensor[sensor_name].get_frame_data(
+                            idx, digit_poses[sensor_name]
+                        )
+                    else:
+                        frame_data = self.sensor[sensor_name].get_frame_data(
+                            idx, digit_poses
+                        )
+                        self.last_is_keyframe = True
+                    self.add_frame(frame_data)
+
+                self.update_scene_properties(idx)
 
     # Keyframe methods ----------------------------------
 
@@ -1731,7 +1809,12 @@ class Trainer:
                     indices = frame_ids <= self.last_track
                     frame_ids = frame_ids[indices]
                 for f in frame_ids:
-                    idx = np.where(all_frame_ids == f.item())[0][0]
+                    # Check if frame_id exists in all_frame_ids
+                    matching_indices = np.where(all_frame_ids == f.item())[0]
+                    if len(matching_indices) == 0:
+                        print(f"[DEBUG][get_pcd] Frame {f.item()} not found in {sensor_name} frame_ids: {all_frame_ids}")
+                        continue
+                    idx = matching_indices[0]
                     if not len(self.full_pc[sensor_name]["points"]):
                         continue
                     # get the pointcloud in the world frame from add_pc_to_memory()
@@ -1976,16 +2059,25 @@ class Trainer:
                 and len(frame_id_batch) > 1
                 and self.incremental
             ):
-                frame_t_1 = self.get_pcd(
-                    source=None, frame_ids=torch.tensor(frame_id_batch[-2])
-                )  # t - 1 frame visuo-tactile pointcloud
-                frame_t = self.get_pcd(
-                    source=None, frame_ids=torch.tensor([frame_id_batch[-1]])
-                )  # t frame visuo-tactile pointcloud
+                try:
+                    frame_t_1 = self.get_pcd(
+                        source=None, frame_ids=torch.tensor(frame_id_batch[-2])
+                    )  # t - 1 frame visuo-tactile pointcloud
+                    frame_t = self.get_pcd(
+                        source=None, frame_ids=torch.tensor([frame_id_batch[-1]])
+                    )  # t frame visuo-tactile pointcloud
 
-                self.pose_optimizer.addPointCloud(
-                    frame_t_1.point.positions.numpy(), frame_t.point.positions.numpy()
-                )
+                    # Check if point clouds have points before adding to optimizer
+                    if (len(frame_t_1.point.positions.numpy()) > 0 and 
+                        len(frame_t.point.positions.numpy()) > 0):
+                        self.pose_optimizer.addPointCloud(
+                            frame_t_1.point.positions.numpy(), frame_t.point.positions.numpy()
+                        )
+                    else:
+                        print(f"[DEBUG][step_pose] Skipping ICP - empty point clouds: t-1={len(frame_t_1.point.positions.numpy())}, t={len(frame_t.point.positions.numpy())}")
+                except Exception as e:
+                    print(f"[DEBUG][step_pose] ICP processing failed: {e}")
+                    # Continue without ICP
 
             all_frames = torch.unique(torch.tensor(all_frames, device=self.device))
             if len(all_frames) > self.pose_window_size and self.incremental:
@@ -2029,6 +2121,7 @@ class Trainer:
             object_pose_gt.to(dtype=updated_pose_batch.dtype)
 
             self.object.object_pose_track[pose_list] = updated_pose_batch.float()
+            print(f"[DEBUG][step_pose] object_pose_track[{pose_list}] updated: {updated_pose_batch.float()}")
 
             if self.incremental:
                 self.tracked_frames = np.append(self.tracked_frames, self.last_track)
@@ -2063,3 +2156,15 @@ class Trainer:
             self.render_samples["sdf"] = sdf[idxs].detach().cpu().numpy()
         else:
             self.render_samples["sdf"] = sdf
+
+    def get_latest_digit_images(self) -> Dict[int, Optional[np.ndarray]]:
+        """
+        Returns the latest images for each digit sensor.
+        Returns:
+            Dict[int, Optional[np.ndarray]]: Mapping from digit index to latest image (or None if not received).
+        Raises:
+            NotImplementedError: If offline loader is not implemented.
+        """
+        if self.ros_digit_loader is not None:
+            return self.ros_digit_loader.get_latest_images()
+        raise NotImplementedError("Offline digit data loader not implemented yet.")
